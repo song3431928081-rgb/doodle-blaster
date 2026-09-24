@@ -95,6 +95,35 @@
   <button onclick="location.reload()">PLAY AGAIN</button>
 </div>
 
+<!-- Mobile touch controls -->
+<div id="mobileUI" style="display:none;position:fixed;inset:0;z-index:20;pointer-events:none;user-select:none;-webkit-user-select:none;touch-action:none;">
+  <!-- left joystick -->
+  <div id="joyBase" style="position:absolute;left:30px;bottom:30px;width:130px;height:130px;background:rgba(0,0,0,0.25);border:3px solid rgba(255,255,255,0.5);border-radius:50%;pointer-events:auto;">
+    <div id="joyStick" style="position:absolute;left:50%;top:50%;width:55px;height:55px;background:rgba(255,255,255,0.6);border:3px solid #1a1a1a;border-radius:50%;transform:translate(-50%,-50%);"></div>
+  </div>
+  <!-- right action buttons -->
+  <div id="actionBtns" style="position:absolute;right:20px;bottom:25px;display:grid;grid-template-columns:repeat(3,70px);grid-template-rows:repeat(3,70px);gap:10px;pointer-events:auto;">
+    <div></div>
+    <button class="mbtn" data-action="jump" style="grid-column:2;grid-row:1;">JUMP</button>
+    <div></div>
+    <button class="mbtn" data-action="grapple" style="grid-column:1;grid-row:2;">GRAP</button>
+    <button class="mbtn" data-action="dash" style="grid-column:3;grid-row:2;">DASH</button>
+    <div></div>
+    <button class="mbtn" data-action="slash" style="grid-column:1;grid-row:3;background:#ff5e9a;">SLASH</button>
+    <div></div>
+    <button class="mbtn" data-action="shoot" style="grid-column:3;grid-row:3;background:#6ec5ff;">PAINT</button>
+  </div>
+</div>
+<style>
+.mbtn{
+  background:rgba(255,255,255,0.55);border:3px solid #1a1a1a;border-radius:50%;
+  font-family:'Comic Sans MS',cursive;font-weight:bold;font-size:13px;color:#1a1a1a;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;touch-action:none;
+}
+.mbtn:active{ background:#ffe98a !important; transform:scale(0.92); }
+</style>
+
 <script type="importmap">
 {
   "imports": {
@@ -542,14 +571,14 @@ function hideLockHint(){ lockHint.style.display='none'; }
 document.addEventListener('pointerlockchange', ()=>{
   if(document.pointerLockElement === renderer.domElement){
     hideLockHint();
-  } else if(started && player.alive){
+  } else if(started && player.alive && !isMobile){
     showLockHint();
   }
 });
 // clicking the lock hint (or canvas) requests pointer lock
 lockHint.addEventListener('click', ()=>{ renderer.domElement.requestPointerLock(); });
 renderer.domElement.addEventListener('click', ()=>{
-  if(started && player.alive && document.pointerLockElement !== renderer.domElement){
+  if(started && player.alive && !isMobile && document.pointerLockElement !== renderer.domElement){
     renderer.domElement.requestPointerLock();
   }
 });
@@ -559,13 +588,117 @@ document.getElementById('start').addEventListener('click', ()=>{
     started=true;
     document.getElementById('start').style.display='none';
     startWave(1);
-    // request pointer lock inside the user gesture
-    renderer.domElement.requestPointerLock();
-    // fallback: if lock didn't engage within 600ms, show hint
-    setTimeout(()=>{
-      if(document.pointerLockElement !== renderer.domElement) showLockHint();
-    }, 600);
+    if(isMobile){
+      document.getElementById('mobileUI').style.display='block';
+    } else {
+      renderer.domElement.requestPointerLock();
+      setTimeout(()=>{ if(document.pointerLockElement !== renderer.domElement) showLockHint(); }, 600);
+    }
   }
+});
+
+/* ============ MOBILE TOUCH CONTROLS ============ */
+const isMobile = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+const mobileMove = { x:0, z:0 }; // x=forward(-1..1), z=right(-1..1)
+const joyBase = document.getElementById('joyBase');
+const joyStick = document.getElementById('joyStick');
+let joyTouchId = null, joyCenter={x:0,y:0};
+
+function handleJoyStart(e){
+  const t = e.changedTouches[0];
+  joyTouchId = t.identifier;
+  const r = joyBase.getBoundingClientRect();
+  joyCenter = { x: r.left+r.width/2, y: r.top+r.height/2 };
+  handleJoyMove(e);
+}
+function handleJoyMove(e){
+  if(joyTouchId===null) return;
+  let t=null;
+  for(const tt of e.changedTouches){ if(tt.identifier===joyTouchId){ t=tt; break; } }
+  if(!t) return;
+  let dx = t.clientX - joyCenter.x;
+  let dy = t.clientY - joyCenter.y;
+  const maxR = 50;
+  const dist = Math.sqrt(dx*dx+dy*dy);
+  if(dist>maxR){ dx = dx/dist*maxR; dy = dy/dist*maxR; }
+  joyStick.style.left = (50 + dx*100/130) + '%';
+  joyStick.style.top = (50 + dy*100/130) + '%';
+  mobileMove.x = -dy/maxR;  // forward = up = negative dy
+  mobileMove.z = dx/maxR;
+}
+function handleJoyEnd(e){
+  for(const tt of e.changedTouches){
+    if(tt.identifier===joyTouchId){
+      joyTouchId=null;
+      joyStick.style.left='50%'; joyStick.style.top='50%';
+      mobileMove.x=0; mobileMove.z=0;
+    }
+  }
+}
+joyBase.addEventListener('touchstart', handleJoyStart, {passive:false});
+joyBase.addEventListener('touchmove', handleJoyMove, {passive:false});
+joyBase.addEventListener('touchend', handleJoyEnd);
+joyBase.addEventListener('touchcancel', handleJoyEnd);
+
+// right-side look drag
+let lookTouchId=null, lookLast={x:0,y:0};
+function onTouchStartLook(e){
+  for(const t of e.changedTouches){
+    // ignore touches on joystick or action buttons
+    const el = document.elementFromPoint(t.clientX, t.clientY);
+    if(el && el.closest('#joyBase, #actionBtns')) continue;
+    if(t.clientX > innerWidth*0.4 && lookTouchId===null){
+      lookTouchId = t.identifier;
+      lookLast = {x:t.clientX, y:t.clientY};
+    }
+  }
+}
+function onTouchMoveLook(e){
+  for(const t of e.changedTouches){
+    if(t.identifier===lookTouchId){
+      const dx = t.clientX - lookLast.x;
+      const dy = t.clientY - lookLast.y;
+      lookLast = {x:t.clientX, y:t.clientY};
+      player.yaw -= dx * 0.005;
+      player.pitch -= dy * 0.005;
+      player.pitch = Math.max(-1.4, Math.min(1.4, player.pitch));
+    }
+  }
+}
+function onTouchEndLook(e){
+  for(const t of e.changedTouches){
+    if(t.identifier===lookTouchId){ lookTouchId=null; }
+  }
+}
+document.addEventListener('touchstart', onTouchStartLook, {passive:true});
+document.addEventListener('touchmove', onTouchMoveLook, {passive:false});
+document.addEventListener('touchend', onTouchEndLook);
+// prevent page scroll/zoom on mobile
+document.addEventListener('touchmove', e=>{ if(e.touches.length>1 || isMobile) e.preventDefault(); }, {passive:false});
+
+// action buttons
+let shootHeld=false;
+document.querySelectorAll('.mbtn').forEach(btn=>{
+  const act = btn.dataset.action;
+  btn.addEventListener('touchstart', e=>{
+    e.preventDefault();
+    if(act==='shoot'){ shootHeld=true; }
+    else if(act==='slash'){ doSlash(); }
+    else if(act==='jump'){ if(player.onGround && player.alive){ player.vel.y=9; player.onGround=false; } }
+    else if(act==='dash'){
+      if(player.dashes>0 && player.alive){
+        player.dashes--; player.dashCD=0.4;
+        const d=new THREE.Vector3(); camera.getWorldDirection(d); d.y=0; d.normalize();
+        player.vel.x=d.x*22; player.vel.z=d.z*22; updateDashHUD();
+      }
+    }
+    else if(act==='grapple'){ startGrapple(); }
+  }, {passive:false});
+  btn.addEventListener('touchend', e=>{
+    e.preventDefault();
+    if(act==='shoot'){ shootHeld=false; }
+    else if(act==='grapple'){ stopGrapple(); }
+  }, {passive:false});
 });
 
 /* ============ WEAPON ACTIONS ============ */
@@ -752,8 +885,12 @@ function loop(){
     const fwd = new THREE.Vector3(-Math.sin(player.yaw),0,-Math.cos(player.yaw));
     const right = new THREE.Vector3(Math.cos(player.yaw),0,-Math.sin(player.yaw));
     let mx=0,mz=0;
-    if(keys['KeyW']) mx+=1; if(keys['KeyS']) mx-=1;
-    if(keys['KeyD']) mz+=1; if(keys['KeyA']) mz-=1;
+    if(isMobile){
+      mx = mobileMove.x; mz = mobileMove.z;
+    } else {
+      if(keys['KeyW']) mx+=1; if(keys['KeyS']) mx-=1;
+      if(keys['KeyD']) mz+=1; if(keys['KeyA']) mz-=1;
+    }
     const move = fwd.clone().multiplyScalar(mx).add(right.clone().multiplyScalar(mz));
     if(move.length()>0) move.normalize();
     const speed = player.dashCD>0 ? 22 : 7;
@@ -807,7 +944,7 @@ function loop(){
 
     // auto fire
     paintCD -= dt;
-    if(mouseDownL && paintCD<=0){ shootPaint(); paintCD=0.18; }
+    if((mouseDownL || shootHeld) && paintCD<=0){ shootPaint(); paintCD=0.18; }
 
     // slash anim
     slashTimer = Math.max(0, slashTimer-dt);
